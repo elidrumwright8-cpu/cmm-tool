@@ -58,8 +58,7 @@ table.data-table input:hover, table.data-table select:hover, table.data-table in
 <body>
 
 <header class="topbar">
-  <h1 id="titleClick" style="cursor: default; user-select: none;">CMM Report → Spreadsheet</h1>
-  <button id="settingsBtn" class="btn secondary hidden">Settings</button>
+  <h1>CMM Report → Spreadsheet</h1>
 </header>
 
 <main id="app">
@@ -94,153 +93,14 @@ table.data-table input:hover, table.data-table select:hover, table.data-table in
 
 </main>
 
-<div id="settingsModal" class="modal hidden">
-  <div class="modal-box">
-    <h2>Settings</h2>
-    <p class="muted">This tool reads your CMM report PDFs using an Anthropic API key, called directly
-      from your browser — there's no server involved. Get a key at
-      <a href="https://console.anthropic.com" target="_blank">console.anthropic.com</a>.
-      It's saved only in this browser (localStorage), never sent anywhere except Anthropic's API.</p>
-    <label>Anthropic API key</label>
-    <input type="password" id="apiKeyInput" placeholder="sk-ant-..." />
-    <div id="keyStatus" class="muted" style="margin-top:6px;"></div>
-    <div class="modal-actions">
-      <button id="saveKeyBtn" class="btn primary">Save</button>
-      <button id="removeKeyBtn" class="btn secondary">Remove saved key</button>
-      <button id="closeSettingsBtn" class="btn secondary">Close</button>
-    </div>
-  </div>
-</div>
-
 <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
 <script>
 pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js";
 
-const MODEL = "claude-sonnet-5";
-const API_KEY_STORAGE = "cmm_tool_api_key";
-// Shared team key baked in so this works for everyone out of the box.
-// Change it any time via the hidden Settings (5 clicks on the title).
-const DEFAULT_API_KEY = "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";
-
-const EXTRACTION_PROMPT = `You are reading one page of a CMM (Coordinate Measuring Machine) inspection \
-report for a manufactured part. These reports list dimensional checks grouped under section \
-headers (e.g. "DATUM -D- I.D Bore, True Position & Perpendicularity"), each with rows showing an \
-axis or measurement type, a measured value (MEAS), a nominal/target value (NOMINAL), plus-tolerance \
-(+TOL) and minus-tolerance (-TOL), and sometimes a material condition symbol (MMC, RFS, LMC) or an \
-explicit status marker.
-
-Read this page carefully and extract every measurement row into JSON.
-
-Also find, if present on this page, the report's header info: SERIAL NUMBER, WORK ORDER NUMBER, PART NUMBER.
-
-Return ONLY valid JSON (no markdown fences, no commentary) matching this exact shape:
-
-{
-  "serial_number": "<string or null if not visible on this page>",
-  "part_number": "<string or null>",
-  "work_order": "<string or null>",
-  "rows": [
-    {
-      "datum_group": "<the section header this row falls under>",
-      "check_section": "<the check/point label, e.g. 'LOC4 - CYL_D'>",
-      "axis": "<axis or sub-measurement label, e.g. 'D', 'X', 'Z', 'DF', 'TP', 'M', 'A'>",
-      "meas": <number or null>,
-      "nominal": <number or null>,
-      "plus_tol": <number or null, use null if no tolerance shown>,
-      "minus_tol": <number or null, use null if no tolerance shown>,
-      "material_cond": "<MMC / RFS / LMC / null>",
-      "reported_status": "<PASS/FAIL/INFO/REF if explicitly shown on the page, else null>"
-    }
-  ]
-}
-
-Rules:
-- One JSON row per measurement line in the table, in the order printed on the page.
-- If a row has no tolerance columns filled in, it's a reference/info row: leave plus_tol and minus_tol null.
-- Keep the exact numeric precision shown (do not round).
-- If the page has no measurement rows, return an empty "rows" list.
-- Never invent numbers you can't actually read; if a value is illegible, use null for that field.`;
-
-// ---------- API key ----------
-
-let storageBlocked = false;
-function getApiKey() {
-  try {
-    const stored = localStorage.getItem(API_KEY_STORAGE);
-    return stored || DEFAULT_API_KEY;
-  } catch { storageBlocked = true; return DEFAULT_API_KEY; }
-}
-function hasOverrideKey() {
-  try { return !!localStorage.getItem(API_KEY_STORAGE); } catch { return false; }
-}
-function setApiKey(k) {
-  try { localStorage.setItem(API_KEY_STORAGE, k); return true; }
-  catch { storageBlocked = true; return false; }
-}
-
-function refreshKeyStatus() {
-  document.getElementById("keyStatus").innerHTML = hasOverrideKey()
-    ? '<span style="color:#1a7a3c">&#10003; Using your own saved key on this browser</span>'
-    : '<span style="color:#1a7a3c">&#10003; Using the shared team key</span>';
-}
-
-// ---------- Secret settings reveal ----------
-// Click the title 5 times within 3 seconds to show/hide the Settings button.
-(function () {
-  const title = document.getElementById("titleClick");
-  const settingsBtn = document.getElementById("settingsBtn");
-  let clicks = [];
-  title.addEventListener("click", () => {
-    const now = Date.now();
-    clicks.push(now);
-    clicks = clicks.filter(t => now - t < 3000);
-    if (clicks.length >= 5) {
-      settingsBtn.classList.toggle("hidden");
-      clicks = [];
-    }
-  });
-})();
-
-document.getElementById("settingsBtn").onclick = () => {
-  document.getElementById("settingsModal").classList.remove("hidden");
-  refreshKeyStatus();
-};
-document.getElementById("closeSettingsBtn").onclick = () => document.getElementById("settingsModal").classList.add("hidden");
-document.getElementById("removeKeyBtn").onclick = () => {
-  try { localStorage.removeItem(API_KEY_STORAGE); } catch {}
-  refreshKeyStatus();
-};
-document.getElementById("saveKeyBtn").onclick = () => {
-  const input = document.getElementById("apiKeyInput");
-  const val = input.value.trim();
-  if (!val) {
-    input.style.borderColor = "#c0362c";
-    input.placeholder = "Paste a key first";
-    return;
-  }
-  const saved = setApiKey(val);
-  if (!saved) {
-    document.getElementById("keyStatus").innerHTML =
-      '<span style="color:#c0362c">This browser is blocking local storage for files opened this way. ' +
-      'Try a different browser, or ask IT about opening this over a local web address instead of double-clicking the file.</span>';
-    return;
-  }
-  input.value = "";
-  input.style.borderColor = "";
-  refreshKeyStatus();
-
-  const btn = document.getElementById("saveKeyBtn");
-  const original = btn.textContent;
-  btn.textContent = "Saved ✓";
-  btn.disabled = true;
-  setTimeout(() => {
-    btn.textContent = original;
-    btn.disabled = false;
-    document.getElementById("settingsModal").classList.add("hidden");
-  }, 900);
-};
-refreshKeyStatus();
+// This tool sends page images to your Cloudflare Worker proxy, which holds
+// the real Anthropic API key server-side. Set this to your deployed worker's URL.
+const WORKER_URL = "https://cmm-proxy.elidrumwright8.workers.dev/";
 
 function showError(msg) {
   const box = document.getElementById("errorBox");
@@ -299,7 +159,7 @@ async function pdfToPageImages(file) {
     const ctx = canvas.getContext("2d");
     await page.render({ canvasContext: ctx, viewport }).promise;
     const dataUrl = canvas.toDataURL("image/png");
-    images.push(dataUrl.split(",")[1]); // strip "data:image/png;base64,"
+    images.push(dataUrl.split(",")[1]);
   }
   return images;
 }
@@ -310,30 +170,15 @@ function stripJsonFences(text) {
   return text.trim().replace(/^```(json)?/, "").replace(/```$/, "").trim();
 }
 
-async function extractPage(base64png, apiKey) {
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
+async function extractPage(base64png) {
+  const res = await fetch(WORKER_URL, {
     method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-      "anthropic-dangerous-direct-browser-access": "true",
-    },
-    body: JSON.stringify({
-      model: MODEL,
-      max_tokens: 4000,
-      messages: [{
-        role: "user",
-        content: [
-          { type: "image", source: { type: "base64", media_type: "image/png", data: base64png } },
-          { type: "text", text: EXTRACTION_PROMPT },
-        ],
-      }],
-    }),
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ image: base64png }),
   });
   if (!res.ok) {
     const errText = await res.text();
-    throw new Error(`API error ${res.status}: ${errText.slice(0, 300)}`);
+    throw new Error(`Proxy error ${res.status}: ${errText.slice(0, 300)}`);
   }
   const data = await res.json();
   const text = data.content.filter(b => b.type === "text").map(b => b.text).join("");
@@ -346,10 +191,10 @@ async function extractPage(base64png, apiKey) {
 
 const CONCURRENCY = 12;
 
-async function extractPageWithRetry(base64png, apiKey, retries = 3) {
+async function extractPageWithRetry(base64png, retries = 3) {
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
-      return await extractPage(base64png, apiKey);
+      return await extractPage(base64png);
     } catch (err) {
       const isRateLimit = /429/.test(err.message);
       const isServerErr = /5\d\d/.test(err.message);
@@ -382,16 +227,13 @@ async function runPool(tasks, worker, concurrency, onProgress) {
   return results;
 }
 
-async function extractAllFiles(files, apiKey, progressCb) {
-  // Render every page of every file first (fast, local, CPU-bound).
+async function extractAllFiles(files, progressCb) {
   const fileData = [];
   for (const file of files) {
     const images = await pdfToPageImages(file);
     fileData.push({ file, images, pages: new Array(images.length) });
   }
 
-  // Flatten into one task list so all pages, across all files, share a single
-  // concurrency pool -- a batch of PDFs finishes about as fast as one big one.
   const tasks = [];
   fileData.forEach((fd, fileIdx) => {
     fd.images.forEach((img, pageIdx) => tasks.push({ fileIdx, pageIdx, img }));
@@ -400,7 +242,7 @@ async function extractAllFiles(files, apiKey, progressCb) {
   await runPool(
     tasks,
     async (task) => {
-      const result = await extractPageWithRetry(task.img, apiKey);
+      const result = await extractPageWithRetry(task.img);
       fileData[task.fileIdx].pages[task.pageIdx] = {
         page_number: task.pageIdx + 1, rows: result.rows || [], _meta: result,
       };
@@ -480,17 +322,12 @@ let rows = [];
 
 document.getElementById("extractBtn").onclick = async () => {
   clearError();
-  const apiKey = getApiKey();
-  if (!apiKey) {
-    document.getElementById("settingsModal").classList.remove("hidden");
-    return;
-  }
   document.getElementById("uploadStep").classList.add("hidden");
   document.getElementById("progressStep").classList.remove("hidden");
   const statusEl = document.getElementById("progressStatus");
 
   try {
-    const partResults = await extractAllFiles(selectedFiles, apiKey, (done, total) => {
+    const partResults = await extractAllFiles(selectedFiles, (done, total) => {
       statusEl.textContent = `Reading pages — ${done}/${total} done across ${selectedFiles.length} file(s)`;
     });
     statusEl.textContent = "Assembling data...";
